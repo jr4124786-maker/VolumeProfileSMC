@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
 
-# Impede que duas execuÃ§Ãµes rodem ao mesmo tempo (evita conflito no push do state.json)
 concurrency:
   group: sinais-forex
   cancel-in-progress: false
@@ -23,7 +22,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Instalar dependÃªncias
+      - name: Instalar dependências
         run: pip install -r requirements.txt
 
       - name: Rodar o bot
