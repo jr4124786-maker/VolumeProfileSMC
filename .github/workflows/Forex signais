@@ -1,0 +1,50 @@
+name: Sinais Forex
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# Impede que duas execuÃ§Ãµes rodem ao mesmo tempo (evita conflito no push do state.json)
+concurrency:
+  group: sinais-forex
+  cancel-in-progress: false
+
+jobs:
+  rodar-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependÃªncias
+        run: pip install -r requirements.txt
+
+      - name: Rodar o bot
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python signal_bot.py
+
+      - name: Salvar estado (evita repetir alertas)
+        run: |
+          git config user.name "bot-sinais"
+          git config user.email "bot@sinais.local"
+          git add state.json
+          if git diff --cached --quiet; then
+            echo "Nada novo para salvar."
+          else
+            git commit -m "Atualiza estado dos sinais"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break
+              echo "Push falhou, tentando de novo em 5s..."
+              sleep 5
+            done
+          fi
