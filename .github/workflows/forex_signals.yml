@@ -1,0 +1,37 @@
+name: Sinais Forex
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  rodar-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependÃªncias
+        run: pip install -r requirements.txt
+
+      - name: Rodar o bot
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python signal_bot.py
+
+      - name: Salvar estado (evita repetir alertas)
+        run: |
+          git config user.name "bot-sinais"
+          git config user.email "bot@sinais.local"
+          git add state.json
+          git diff --cached --quiet || git commit -m "Atualiza estado dos sinais"
+          git push
