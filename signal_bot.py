@@ -39,7 +39,7 @@ PAIRS_CONFIG = {
     "EUR_USD": {"source": "twelvedata", "td_symbol": "EUR/USD", "session_hour": 18, "tz": "UTC"},
     "GBP_USD": {"source": "twelvedata", "td_symbol": "GBP/USD", "session_hour": 18, "tz": "UTC"},
     "USD_JPY": {"source": "twelvedata", "td_symbol": "USD/JPY", "session_hour": 18, "tz": "UTC"},
-    "BTC_USD": {"source": "binance", "binance_symbol": "BTCUSDT", "session_hour": 0, "tz": "UTC"},
+    "BTC_USD": {"source": "twelvedata", "td_symbol": "BTC/USD", "session_hour": 0, "tz": "UTC"},
 }
 
 # Se os horários das velas do seu MT5 (Exness/Pepperstone) estiverem
@@ -52,6 +52,10 @@ CANDLE_COUNT = 300          # ~3 dias de velas de 15 min, suficiente p/ 2 sessõ
 
 NUM_BINS = 50               # nº de "fatias" de preço no Volume Profile
 VALUE_AREA_PCT = 0.70       # 70% do volume define a área de valor (VAH/VAL)
+
+# Fuso horário só para exibir o horário do sinal na mensagem do Telegram
+# (não afeta o cálculo do Volume Profile). Troque se não estiver no Brasil.
+DISPLAY_TZ = ZoneInfo("America/Sao_Paulo")
 
 SWING_LEFT = 2              # velas à esquerda para confirmar um topo/fundo
 SWING_RIGHT = 2             # velas à direita para confirmar um topo/fundo
@@ -355,10 +359,12 @@ def main():
             if signal:
                 key = f"{pair_name}|{signal['setup']}|{today_str}"
                 if not state.get(key):
+                    horario_sinal = candles[-1]["time"].astimezone(DISPLAY_TZ).strftime("%d/%m/%Y %H:%M")
                     msg = (f"<b>{pair_name.replace('_', '/')}</b>\n"
                            f"Setup: {signal['setup']}\n"
                            f"{signal['detalhe']}\n"
-                           f"Preço atual: {candles[-1]['close']}")
+                           f"Preço atual: {candles[-1]['close']}\n"
+                           f"Horário: {horario_sinal}")
                     send_telegram_message(msg)
                     state[key] = True
                     print(f"{pair_name}: alerta enviado ({signal['setup']}).")
