@@ -1,50 +1,50 @@
-Nome: Sinais Forex
+name: Sinais Forex
 
-sobre:
-  agendar:
+on:
+  schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
-permissões:
-  Conteúdo: escrever
+permissions:
+  contents: write
 
-# Impede que duas execuções rodem ao mesmo tempo (evita conflito no push do state.json)
-concorrência:
-  grupo: cômoda-forex
-  cancelamento em andamento: falso
+# Impede que duas execuÃ§Ãµes rodem ao mesmo tempo (evita conflito no push do state.json)
+concurrency:
+  group: sinais-forex
+  cancel-in-progress: false
 
-empregos:
+jobs:
   rodar-bot:
     runs-on: ubuntu-latest
-    passos:
-      - usa: ações/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-      - usa: actions/setup-python@v5
-        com:
-          versão do python: "3.11"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - nome: Instalar dependências
-        Execute: pip install -r requirements.txt
+      - name: Instalar dependÃªncias
+        run: pip install -r requirements.txt
 
-      - nome: Rodar o bot
-        ambiente:
+      - name: Rodar o bot
+        env:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          ID_DO_CHAT_DO_TELEGRAM: ${{ secrets.TELEGRAM_CHAT_ID }}
-        executar: python signal_bot.py
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python signal_bot.py
 
-      - nome: Salvar estado (evita repetir alertas)
-        executar: |
+      - name: Salvar estado (evita repetir alertas)
+        run: |
           git config user.name "bot-sinais"
           git config user.email "bot@sinais.local"
-          git adicionar state.json
-          se git diff --cached --quiet; então
-            eco "Nada novo para salvar."
-          outro
+          git add state.json
+          if git diff --cached --quiet; then
+            echo "Nada novo para salvar."
+          else
             git commit -m "Atualiza estado dos sinais"
-            para i em 1 2 3 4 5; faça
+            for i in 1 2 3 4 5; do
               git pull --rebase origin main && git push && break
               echo "Push falhou, tentando de novo em 5s..."
-              dormir 5
-            feito
+              sleep 5
+            done
           fi
