@@ -5,18 +5,25 @@ Bot de sinais Forex/BTC — Volume Profile + Smart Money Concepts (SMC)
 Roda de graça no GitHub Actions (agendado), sem precisar de PC ou VPS.
 
 O QUE ELE FAZ, A CADA EXECUÇÃO:
-1. Busca candles de EUR/USD, GBP/USD, USD/JPY (via Twelve Data, plano grátis,
-   funciona de qualquer país) e de BTC (via Binance, API pública sem chave).
+1. Busca candles de EUR/USD, GBP/USD, USD/JPY e BTC via Twelve Data
+   (plano grátis, funciona de qualquer país, uma chave só para os 4).
 2. Calcula o Volume Profile da última sessão FECHADA:
    - Forex: janela rolante das 18h de um dia até as 18h do dia seguinte.
    - BTC: janela rolante de 00h até 00h (meia-noite a meia-noite).
-   -> Disso saem 3 níveis: POC, VAH e VAL.
+   -> Disso saem 3 níveis (POC, VAH, VAL) e onde a sessão fechou.
 3. Analisa a estrutura de preço (topos/fundos, BOS/CHOCH) e procura
-   order blocks e Fair Value Gaps (FVG) recentes.
-4. Se o preço atual encaixa em um dos 3 setups clássicos (Repique no POC,
-   Reversão na Área de Valor, Rompimento) E há confluência com SMC,
-   manda um alerta no Telegram — só uma vez por setup/dia (usa state.json
-   para não repetir o mesmo aviso a cada 15 minutos).
+   order blocks, Fair Value Gaps (FVG) e candles de rejeição/engolfo.
+4. Aplica as 3 estratégias clássicas de Volume Profile, cada uma com
+   sua condição de validade (igual ao guia):
+   - Repique no POC: só vale se a sessão anterior fechou FORA da área
+     de valor; confirma com rejeição/order block/FVG no POC.
+   - Reversão na Área de Valor: só vale se a sessão anterior fechou
+     DENTRO da área de valor; exige candle fechando de volta pra
+     dentro (pavio cruzando não conta) + CHOCH.
+   - Rompimento: rompeu a área, fez pullback ficando perto dela, e
+     confirmou com BOS na direção do rompimento.
+   Manda um alerta no Telegram por setup/par/dia (usa state.json para
+   não repetir o mesmo aviso a cada 15 minutos).
 
 O QUE VOCÊ PODE AJUSTAR SEM PROGRAMAR (procure "AJUSTE AQUI"):
 - PAIRS_CONFIG: pares, fonte de dados e horário da sessão de cada um.
@@ -185,7 +192,8 @@ def compute_volume_profile(candles, session_start, session_end):
 
     val_price = price_min + min(included) * bin_size
     vah_price = price_min + (max(included) + 1) * bin_size
-    return {"poc": poc_price, "vah": vah_price, "val": val_price}
+    session_close = session_candles[-1]["close"]  # fechamento da sessão anterior (define Estratégia 1 vs 2)
+    return {"poc": poc_price, "vah": vah_price, "val": val_price, "session_close": session_close}
 
 
 # =========================================================================
@@ -255,6 +263,18 @@ def price_in_zone(price, zone):
     return (bottom - margin) <= price <= (top + margin)
 
 
+def is_rejection_candle(prev_candle, candle, direction):
+    """Padrão de engolfo/rejeição, do jeito que o guia de Volume Profile descreve
+    para confirmar o Repique no POC (candlestick de rejeição no nível)."""
+    if direction == "alta":
+        return (candle["close"] > candle["open"]
+                and candle["close"] > prev_candle["open"]
+                and candle["open"] <= prev_candle["close"])
+    return (candle["close"] < candle["open"]
+            and candle["close"] < prev_candle["open"]
+            and candle["open"] >= prev_candle["close"])
+
+
 # =========================================================================
 # LÓGICA DE SINAL (confluência Volume Profile + SMC)
 # =========================================================================
@@ -266,41 +286,65 @@ def generate_signal(candles, vp):
     current = candles[-1]
     price = current["close"]
     poc, vah, val = vp["poc"], vp["vah"], vp["val"]
+    session_close = vp["session_close"]
+    fechou_dentro_da_area = val <= session_close <= vah  # onde a sessão anterior terminou
 
     swings = find_swings(candles)
     structure_event = detect_structure_event(candles, swings)
 
     poc_tolerance = (vah - val) * 0.05 if vah != val else price * 0.0005
+    va_width = (vah - val) if vah > val else price * 0.001
 
-    # 1) Repique no POC
-    if abs(price - poc) <= poc_tolerance:
+    # ------------------------------------------------------------------
+    # Estratégia 1 — Repique no POC
+    # Só é válida se a SESSÃO ANTERIOR terminou FORA da Área de Valor.
+    # ------------------------------------------------------------------
+    if not fechou_dentro_da_area and abs(price - poc) <= poc_tolerance:
         direction = "alta" if current["close"] > current["open"] else "baixa"
+        rejeicao = is_rejection_candle(candles[-2], candles[-1], direction)
         ob = find_order_block(candles, direction)
         fvgs = find_recent_fvgs(candles)
-        confluencia = (ob and price_in_zone(price, ob)) or any(price_in_zone(price, f) for f in fvgs)
+        confluencia = rejeicao or (ob and price_in_zone(price, ob)) or any(price_in_zone(price, f) for f in fvgs)
         if confluencia:
             return {"setup": "Repique no POC",
-                    "detalhe": f"Preço testando o POC ({poc:.5f}) com order block/FVG por perto."}
+                    "detalhe": f"Sessão anterior fechou fora da área de valor; preço testando o POC ({poc:.5f}) "
+                               f"com confirmação de rejeição/order block/FVG."}
 
-    # 2) Reversão na Área de Valor (varredura de liquidez + CHOCH)
-    recent_highs = [c["high"] for c in candles[-5:]]
-    recent_lows = [c["low"] for c in candles[-5:]]
-    varreu_topo = max(recent_highs) > vah and price < vah
-    varreu_fundo = min(recent_lows) < val and price > val
-    if varreu_topo and structure_event == "CHOCH_BAIXA":
-        return {"setup": "Reversão na Área de Valor",
-                "detalhe": f"Varredura de liquidez acima da VAH ({vah:.5f}) seguida de CHOCH de baixa."}
-    if varreu_fundo and structure_event == "CHOCH_ALTA":
-        return {"setup": "Reversão na Área de Valor",
-                "detalhe": f"Varredura de liquidez abaixo da VAL ({val:.5f}) seguida de CHOCH de alta."}
+    # ------------------------------------------------------------------
+    # Estratégia 2 — Reversão na Área de Valor
+    # Só é válida se a SESSÃO ANTERIOR terminou DENTRO da Área de Valor.
+    # Exige um candle fechando de volta para dentro (pavio cruzando não conta).
+    # ------------------------------------------------------------------
+    if fechou_dentro_da_area:
+        candles_antes = candles[-10:-1]
+        rompeu_topo = any(c["close"] > vah for c in candles_antes)
+        rompeu_fundo = any(c["close"] < val for c in candles_antes)
+        fechou_de_volta = val <= price <= vah
+        if rompeu_topo and fechou_de_volta and structure_event == "CHOCH_BAIXA":
+            return {"setup": "Reversão na Área de Valor",
+                    "detalhe": f"Sessão anterior fechou dentro da área de valor; preço saiu acima da VAH "
+                               f"({vah:.5f}) e fechou de volta para dentro, com CHOCH de baixa."}
+        if rompeu_fundo and fechou_de_volta and structure_event == "CHOCH_ALTA":
+            return {"setup": "Reversão na Área de Valor",
+                    "detalhe": f"Sessão anterior fechou dentro da área de valor; preço saiu abaixo da VAL "
+                               f"({val:.5f}) e fechou de volta para dentro, com CHOCH de alta."}
 
-    # 3) Rompimento (continuação com BOS)
-    if price > vah and structure_event == "BOS_ALTA":
+    # ------------------------------------------------------------------
+    # Estratégia 3 — Rompimento
+    # Vale com a sessão anterior tendo fechado dentro ou fora da área.
+    # Rompeu -> pullback ficando perto da área -> BOS na direção do rompimento.
+    # ------------------------------------------------------------------
+    candles_antes = candles[-12:-1]
+    rompeu_para_cima = any(c["close"] > vah for c in candles_antes)
+    rompeu_para_baixo = any(c["close"] < val for c in candles_antes)
+    pullback_alta = rompeu_para_cima and vah < price <= vah + va_width * 0.3
+    pullback_baixa = rompeu_para_baixo and val - va_width * 0.3 <= price < val
+    if pullback_alta and structure_event == "BOS_ALTA":
         return {"setup": "Rompimento de alta",
-                "detalhe": f"Fechamento acima da VAH ({vah:.5f}) com BOS de alta."}
-    if price < val and structure_event == "BOS_BAIXA":
+                "detalhe": f"Rompeu a VAH ({vah:.5f}), fez pullback perto da área e confirmou com BOS de alta."}
+    if pullback_baixa and structure_event == "BOS_BAIXA":
         return {"setup": "Rompimento de baixa",
-                "detalhe": f"Fechamento abaixo da VAL ({val:.5f}) com BOS de baixa."}
+                "detalhe": f"Rompeu a VAL ({val:.5f}), fez pullback perto da área e confirmou com BOS de baixa."}
 
     return None
 
@@ -356,15 +400,21 @@ def main():
             vp = compute_volume_profile(candles, session_start, session_end)
             signal = generate_signal(candles, vp)
 
+            def fmt(dt):
+                return dt.astimezone(DISPLAY_TZ).strftime("%d/%m %H:%M")
+
+            print(f"{pair_name}: perfil de volume de {fmt(session_start)} até {fmt(session_end)} "
+                  f"| último candle recebido: {fmt(candles[-1]['time'])}")
+
             if signal:
                 key = f"{pair_name}|{signal['setup']}|{today_str}"
                 if not state.get(key):
-                    horario_sinal = candles[-1]["time"].astimezone(DISPLAY_TZ).strftime("%d/%m/%Y %H:%M")
                     msg = (f"<b>{pair_name.replace('_', '/')}</b>\n"
                            f"Setup: {signal['setup']}\n"
                            f"{signal['detalhe']}\n"
                            f"Preço atual: {candles[-1]['close']}\n"
-                           f"Horário: {horario_sinal}")
+                           f"Horário do candle: {fmt(candles[-1]['time'])}\n"
+                           f"Perfil de volume: {fmt(session_start)} até {fmt(session_end)}")
                     send_telegram_message(msg)
                     state[key] = True
                     print(f"{pair_name}: alerta enviado ({signal['setup']}).")
