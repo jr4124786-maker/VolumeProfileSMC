@@ -1,37 +1,50 @@
-name: Sinais Forex
+Nome: Sinais Forex
 
-on:
-  schedule:
+sobre:
+  agendar:
     - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
-permissions:
-  contents: write
+permissões:
+  Conteúdo: escrever
 
-jobs:
+# Impede que duas execuções rodem ao mesmo tempo (evita conflito no push do state.json)
+concorrência:
+  grupo: cômoda-forex
+  cancelamento em andamento: falso
+
+empregos:
   rodar-bot:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    passos:
+      - usa: ações/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - usa: actions/setup-python@v5
+        com:
+          versão do python: "3.11"
 
-      - name: Instalar dependÃªncias
-        run: pip install -r requirements.txt
+      - nome: Instalar dependências
+        Execute: pip install -r requirements.txt
 
-      - name: Rodar o bot
-        env:
+      - nome: Rodar o bot
+        ambiente:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python signal_bot.py
+          ID_DO_CHAT_DO_TELEGRAM: ${{ secrets.TELEGRAM_CHAT_ID }}
+        executar: python signal_bot.py
 
-      - name: Salvar estado (evita repetir alertas)
-        run: |
+      - nome: Salvar estado (evita repetir alertas)
+        executar: |
           git config user.name "bot-sinais"
           git config user.email "bot@sinais.local"
-          git add state.json
-          git diff --cached --quiet || git commit -m "Atualiza estado dos sinais"
-          git push
+          git adicionar state.json
+          se git diff --cached --quiet; então
+            eco "Nada novo para salvar."
+          outro
+            git commit -m "Atualiza estado dos sinais"
+            para i em 1 2 3 4 5; faça
+              git pull --rebase origin main && git push && break
+              echo "Push falhou, tentando de novo em 5s..."
+              dormir 5
+            feito
+          fi
