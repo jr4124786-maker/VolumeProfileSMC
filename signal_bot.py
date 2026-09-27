@@ -43,19 +43,23 @@ import requests
 # =========================================================================
 
 PAIRS_CONFIG = {
-    "EUR_USD": {"source": "twelvedata", "td_symbol": "EUR/USD", "session_hour": 18, "tz": "UTC"},
-    "GBP_USD": {"source": "twelvedata", "td_symbol": "GBP/USD", "session_hour": 18, "tz": "UTC"},
-    "USD_JPY": {"source": "twelvedata", "td_symbol": "USD/JPY", "session_hour": 18, "tz": "UTC"},
+    "EUR_USD": {"source": "twelvedata", "td_symbol": "EUR/USD", "session_hour": 18, "tz": "America/New_York"},
+    "GBP_USD": {"source": "twelvedata", "td_symbol": "GBP/USD", "session_hour": 18, "tz": "America/New_York"},
+    "USD_JPY": {"source": "twelvedata", "td_symbol": "USD/JPY", "session_hour": 18, "tz": "America/New_York"},
     "BTC_USD": {"source": "twelvedata", "td_symbol": "BTC/USD", "session_hour": 0, "tz": "UTC"},
 }
 
-# Se os horários das velas do seu MT5 (Exness/Pepperstone) estiverem
-# 1 a 3 horas diferentes do esperado, troque "tz" acima pelo fuso do
-# servidor do seu broker, ex: "Etc/GMT-2" ou "Etc/GMT-3".
-
+# Por que "America/New_York" e não "UTC": o fechamento/abertura do dia no forex
+# é tradicionalmente marcado pelas 17h-18h de Nova York (quando a sessão de NY
+# fecha e a de Sydney está para abrir). Usando esse fuso (em vez de um UTC fixo),
+# a janela do Volume Profile acompanha automaticamente o horário de verão dos
+# EUA (troca em março/novembro) sem precisar de nenhum ajuste manual — é
+# justamente essa troca de 1h que muda os horários de Londres/Nova York/Sydney
+# vistos a partir do Brasil (que não tem mais horário de verão desde 2019).
+# BTC continua em UTC porque não fecha nunca; não é afetado por DST de mercado.
 INTERVAL_TWELVEDATA = "15min"  # velas de 15 minutos
 INTERVAL_BINANCE = "15m"
-CANDLE_COUNT = 300          # ~3 dias de velas de 15 min, suficiente p/ 2 sessões
+CANDLE_COUNT = 700          # ~7 dias de velas de 15 min — margem para pular fins de semana/feriados
 
 NUM_BINS = 50               # nº de "fatias" de preço no Volume Profile
 VALUE_AREA_PCT = 0.70       # 70% do volume define a área de valor (VAH/VAL)
@@ -66,6 +70,15 @@ DISPLAY_TZ = ZoneInfo("America/Sao_Paulo")
 
 SWING_LEFT = 2              # velas à esquerda para confirmar um topo/fundo
 SWING_RIGHT = 2             # velas à direita para confirmar um topo/fundo
+
+# Placar de ganhos/perdas: quantos pips o preço precisa andar a favor do sinal
+# para contar como ganho. Só se aplica a forex (BTC não usa "pips").
+PIPS_ALVO = 7
+PIP_SIZE = {
+    "EUR_USD": 0.0001,
+    "GBP_USD": 0.0001,
+    "USD_JPY": 0.01,
+}
 
 STATE_FILE = "state.json"
 
@@ -116,6 +129,15 @@ def ensure_volume_proxy(candles):
     return candles
 
 
+def candle_tem_negociacao(c):
+    """Com o mercado fechado (fim de semana/feriado), várias fontes de dado forex
+    continuam emitindo candles de 15 em 15 min repetindo o último preço negociado
+    (abertura = máxima = mínima = fechamento, todos iguais). Um candle assim, sem
+    nenhuma variação de preço, é tratado como "sem negociação real" e descartado —
+    tanto para decidir se uma sessão teve mercado aberto quanto para gerar sinal."""
+    return c["high"] > c["low"]
+
+
 def fetch_binance_candles(symbol):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": INTERVAL_BINANCE, "limit": CANDLE_COUNT}
@@ -139,13 +161,35 @@ def fetch_binance_candles(symbol):
 # VOLUME PROFILE
 # =========================================================================
 
-def get_session_window(session_hour, tz_name):
-    """Retorna (inicio, fim) em UTC da última sessão de 24h já FECHADA."""
+def get_session_window(candles, session_hour, tz_name, min_candles=8, max_lookback_days=7):
+    """Retorna (início, fim) em UTC da última sessão de 24h com negociação
+    real. Começa pela janela "de calendário" mais recente (24h terminando
+    no session_hour); se ela não tiver candles reais de mercado, volta mais
+    um dia e tenta de novo — até achar a última sessão em que o mercado
+    realmente funcionou.
+
+    min_candles é baixo de propósito (só ~2h de negociação já basta): o
+    objetivo é distinguir "mercado global fechado" (fim de semana, Natal,
+    Ano Novo — praticamente zero candles em qualquer fonte) de "só um
+    feriado local" (outras praças continuam operando, ainda vem bastante
+    candle) — sem precisar de uma lista de datas de feriado."""
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
     today_boundary = now.replace(hour=session_hour, minute=0, second=0, microsecond=0)
     session_end = today_boundary if now >= today_boundary else today_boundary - timedelta(days=1)
+
     session_start = session_end - timedelta(days=1)
+    for _ in range(max_lookback_days):
+        session_start = session_end - timedelta(days=1)
+        start_utc = session_start.astimezone(timezone.utc)
+        end_utc = session_end.astimezone(timezone.utc)
+        candles_na_janela = sum(1 for c in candles if start_utc <= c["time"] < end_utc)
+        if candles_na_janela >= min_candles:
+            return start_utc, end_utc
+        session_end = session_start  # sessão vazia (fim de semana/feriado) — volta mais um dia
+
+    # Não achou nenhuma janela com dado suficiente dentro do limite de busca;
+    # devolve a mais antiga tentada mesmo assim (compute_volume_profile trata o caso vazio).
     return session_start.astimezone(timezone.utc), session_end.astimezone(timezone.utc)
 
 
@@ -306,7 +350,7 @@ def generate_signal(candles, vp):
         fvgs = find_recent_fvgs(candles)
         confluencia = rejeicao or (ob and price_in_zone(price, ob)) or any(price_in_zone(price, f) for f in fvgs)
         if confluencia:
-            return {"setup": "Repique no POC",
+            return {"setup": "Repique no POC", "direction": direction,
                     "detalhe": f"Sessão anterior fechou fora da área de valor; preço testando o POC ({poc:.5f}) "
                                f"com confirmação de rejeição/order block/FVG."}
 
@@ -321,11 +365,11 @@ def generate_signal(candles, vp):
         rompeu_fundo = any(c["close"] < val for c in candles_antes)
         fechou_de_volta = val <= price <= vah
         if rompeu_topo and fechou_de_volta and structure_event == "CHOCH_BAIXA":
-            return {"setup": "Reversão na Área de Valor",
+            return {"setup": "Reversão na Área de Valor", "direction": "baixa",
                     "detalhe": f"Sessão anterior fechou dentro da área de valor; preço saiu acima da VAH "
                                f"({vah:.5f}) e fechou de volta para dentro, com CHOCH de baixa."}
         if rompeu_fundo and fechou_de_volta and structure_event == "CHOCH_ALTA":
-            return {"setup": "Reversão na Área de Valor",
+            return {"setup": "Reversão na Área de Valor", "direction": "alta",
                     "detalhe": f"Sessão anterior fechou dentro da área de valor; preço saiu abaixo da VAL "
                                f"({val:.5f}) e fechou de volta para dentro, com CHOCH de alta."}
 
@@ -340,13 +384,80 @@ def generate_signal(candles, vp):
     pullback_alta = rompeu_para_cima and vah < price <= vah + va_width * 0.3
     pullback_baixa = rompeu_para_baixo and val - va_width * 0.3 <= price < val
     if pullback_alta and structure_event == "BOS_ALTA":
-        return {"setup": "Rompimento de alta",
+        return {"setup": "Rompimento de alta", "direction": "alta",
                 "detalhe": f"Rompeu a VAH ({vah:.5f}), fez pullback perto da área e confirmou com BOS de alta."}
     if pullback_baixa and structure_event == "BOS_BAIXA":
-        return {"setup": "Rompimento de baixa",
+        return {"setup": "Rompimento de baixa", "direction": "baixa",
                 "detalhe": f"Rompeu a VAL ({val:.5f}), fez pullback perto da área e confirmou com BOS de baixa."}
 
     return None
+
+
+# =========================================================================
+# PLACAR SEMANAL (ganhos/perdas em pips)
+# =========================================================================
+
+DIAS_PT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]  # Python: Monday=0
+
+
+def semana_tag(dt):
+    """Identificador único da semana (ano-semana ISO), para não misturar
+    o placar de uma semana com o de outra."""
+    iso = dt.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def avaliar_sinal_aberto(sinal, candles):
+    """Olha os candles desde o sinal e vê o que aconteceu primeiro:
+    o preço andou PIPS_ALVO pips a favor (ganho) ou voltou ao preço de
+    entrada sem bater o alvo (perda). Retorna 'ganho', 'perda' ou None
+    (ainda aberto, nenhum dos dois aconteceu ainda)."""
+    entrada = sinal["entry_price"]
+    pip = PIP_SIZE.get(sinal["pair"])
+    if not pip:
+        return None
+    alvo = entrada + PIPS_ALVO * pip if sinal["direction"] == "alta" else entrada - PIPS_ALVO * pip
+    sinal_time = datetime.fromisoformat(sinal["signal_time"])
+    for c in candles:
+        if c["time"] <= sinal_time:
+            continue
+        if sinal["direction"] == "alta":
+            if c["high"] >= alvo:
+                return "ganho"
+            if c["low"] <= entrada:
+                return "perda"
+        else:
+            if c["low"] <= alvo:
+                return "ganho"
+            if c["high"] >= entrada:
+                return "perda"
+    return None
+
+
+def montar_relatorio_semanal(resultados_semana):
+    """Monta a tabela de ganhos/perdas da semana (Dom a Sex) em texto
+    monoespaçado (tag <pre>), pronta para o Telegram."""
+    ordem = ["Seg", "Ter", "Qua", "Qui", "Sex"]
+    linhas = [f"{'Dia':<4}{'✅':>4}{'❌':>4}{'Total':>8}{'Acerto':>9}"]
+    total_g, total_p = 0, 0
+    for dia in ordem:
+        r = resultados_semana.get(dia, {"ganhos": 0, "perdas": 0})
+        g, p = r["ganhos"], r["perdas"]
+        if g == 0 and p == 0:
+            continue
+        total_g += g
+        total_p += p
+        total_dia = g + p
+        taxa = f"{(g / total_dia * 100):.0f}%" if total_dia else "-"
+        linhas.append(f"{dia:<4}{g:>4}{p:>4}{g - p:>+8}{taxa:>9}")
+    if total_g + total_p == 0:
+        linhas.append("(nenhum sinal fechado nesta semana)")
+    else:
+        taxa_total = f"{(total_g / (total_g + total_p) * 100):.0f}%"
+        linhas.append("-" * 29)
+        linhas.append(f"{'Sem.':<4}{total_g:>4}{total_p:>4}{total_g - total_p:>+8}{taxa_total:>9}")
+    tabela = "\n".join(linhas)
+    return f"<b>📊 Placar da semana (alvo: {PIPS_ALVO} pips)</b>\n<pre>{tabela}</pre>"
 
 
 # =========================================================================
@@ -368,8 +479,13 @@ def send_telegram_message(text):
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            state = json.load(f)
+    else:
+        state = {}
+    state.setdefault("open_signals", [])
+    state.setdefault("weekly_results", {})
+    state.setdefault("relatorio_enviado_semana", None)
+    return state
 
 
 def save_state(state):
@@ -396,7 +512,30 @@ def main():
                 print(f"{pair_name}: poucos candles retornados, pulando.")
                 continue
 
-            session_start, session_end = get_session_window(cfg["session_hour"], cfg["tz"])
+            candles = [c for c in candles if candle_tem_negociacao(c)]
+            if len(candles) < 30:
+                print(f"{pair_name}: mercado provavelmente fechado (só vieram candles sem negociação real), pulando.")
+                continue
+
+            # --- Resolve sinais abertos desse par (placar de ganhos/perdas) ---
+            ainda_abertos = []
+            for sinal in state["open_signals"]:
+                if sinal["pair"] != pair_name:
+                    ainda_abertos.append(sinal)
+                    continue
+                resultado = avaliar_sinal_aberto(sinal, candles)
+                if resultado is None:
+                    ainda_abertos.append(sinal)
+                    continue
+                tag = sinal["semana"]
+                dia = sinal["dia"]
+                semana = state["weekly_results"].setdefault(tag, {})
+                registro = semana.setdefault(dia, {"ganhos": 0, "perdas": 0})
+                registro["ganhos" if resultado == "ganho" else "perdas"] += 1
+                print(f"{pair_name}: sinal de {sinal['signal_time']} fechado como {resultado}.")
+            state["open_signals"] = ainda_abertos
+
+            session_start, session_end = get_session_window(candles, cfg["session_hour"], cfg["tz"])
             vp = compute_volume_profile(candles, session_start, session_end)
             signal = generate_signal(candles, vp)
 
@@ -417,6 +556,29 @@ def main():
                            f"Perfil de volume: {fmt(session_start)} até {fmt(session_end)}")
                     send_telegram_message(msg)
                     state[key] = True
+
+                    # Abre o sinal no placar (só pares com pip definido, ou seja, forex)
+                    if pair_name in PIP_SIZE:
+                        candle_time = candles[-1]["time"]
+                        dia_local = candle_time.astimezone(DISPLAY_TZ)
+                        if dia_local.weekday() == 6:
+                            # Domingo à noite é a reabertura do mercado — na prática já é
+                            # o início da semana de negociação, então conta como segunda
+                            # (tanto o rótulo do dia quanto a semana ISO usada no placar).
+                            dia_semana = "Seg"
+                            tag_semana = semana_tag(dia_local + timedelta(days=1))
+                        else:
+                            dia_semana = DIAS_PT[dia_local.weekday()]
+                            tag_semana = semana_tag(dia_local)
+                        state["open_signals"].append({
+                            "pair": pair_name,
+                            "direction": signal["direction"],
+                            "entry_price": candles[-1]["close"],
+                            "signal_time": candle_time.isoformat(),
+                            "semana": tag_semana,
+                            "dia": dia_semana,
+                        })
+
                     print(f"{pair_name}: alerta enviado ({signal['setup']}).")
                 else:
                     print(f"{pair_name}: sinal ativo mas já avisado hoje.")
@@ -425,6 +587,18 @@ def main():
 
         except Exception as e:
             print(f"Erro ao processar {pair_name}: {e}")
+
+    # --- Relatório semanal: enviado uma vez, na primeira checagem depois
+    #     das 18h de sexta-feira em Nova York (mesmo horário que fecha a
+    #     semana de forex) ---
+    agora_ny = datetime.now(ZoneInfo("America/New_York"))
+    if agora_ny.weekday() == 4 and agora_ny.hour >= 18:
+        tag_semana_atual = semana_tag(agora_ny)
+        if state["relatorio_enviado_semana"] != tag_semana_atual:
+            resultados = state["weekly_results"].get(tag_semana_atual, {})
+            send_telegram_message(montar_relatorio_semanal(resultados))
+            state["relatorio_enviado_semana"] = tag_semana_atual
+            print("Relatório semanal enviado.")
 
     save_state(state)
 
