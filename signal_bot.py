@@ -46,7 +46,7 @@ PAIRS_CONFIG = {
     "EUR_USD": {"source": "twelvedata", "td_symbol": "EUR/USD", "session_hour": 18, "tz": "America/New_York"},
     "GBP_USD": {"source": "twelvedata", "td_symbol": "GBP/USD", "session_hour": 18, "tz": "America/New_York"},
     "USD_JPY": {"source": "twelvedata", "td_symbol": "USD/JPY", "session_hour": 18, "tz": "America/New_York"},
-    "BTC_USD": {"source": "twelvedata", "td_symbol": "BTC/USD", "session_hour": 0, "tz": "UTC"},
+    "BTC_USD": {"source": "twelvedata", "td_symbol": "BTC/USD", "exchange": "Binance", "session_hour": 0, "tz": "UTC"},
 }
 
 # Por que "America/New_York" e não "UTC": o fechamento/abertura do dia no forex
@@ -86,7 +86,7 @@ STATE_FILE = "state.json"
 # BUSCA DE DADOS
 # =========================================================================
 
-def fetch_twelvedata_candles(symbol):
+def fetch_twelvedata_candles(symbol, exchange=None):
     api_key = os.environ["TWELVEDATA_API_KEY"]
     url = "https://api.twelvedata.com/time_series"
     params = {
@@ -97,6 +97,8 @@ def fetch_twelvedata_candles(symbol):
         "order": "ASC",
         "apikey": api_key,
     }
+    if exchange:
+        params["exchange"] = exchange
     resp = requests.get(url, params=params, timeout=20)
     resp.raise_for_status()
     data = resp.json()
@@ -355,18 +357,38 @@ def is_rejection_candle(prev_candle, candle, direction):
 # LÓGICA DE SINAL (confluência Volume Profile + SMC)
 # =========================================================================
 
+def candles_desde_ultima_reabertura(candles):
+    """Evita falso BOS/CHOCH causado por gap de preço na reabertura do
+    mercado (o preço pode "pular" ao voltar do fim de semana/feriado, sem
+    ter havido negociação real cruzando os níveis no meio do caminho).
+    Acha o último "buraco" de mais de 30 min entre candles consecutivos
+    (esperado: 15 em 15 min) e devolve só os candles a partir dali —
+    topo/fundo, BOS/CHOCH, order block e FVG passam a usar só dado
+    contínuo, sem misturar com o lado de antes do gap."""
+    limite = timedelta(minutes=30)
+    corte = 0
+    for i in range(1, len(candles)):
+        if candles[i]["time"] - candles[i - 1]["time"] > limite:
+            corte = i
+    return candles[corte:]
+
+
 def generate_signal(candles, vp):
     if vp is None or len(candles) < 30:
         return None
 
-    current = candles[-1]
+    candles_recentes = candles_desde_ultima_reabertura(candles)
+    if len(candles_recentes) < 10:
+        return None  # muito perto da reabertura; sem histórico contínuo suficiente pra confirmar estrutura
+
+    current = candles_recentes[-1]
     price = current["close"]
     poc, vah, val = vp["poc"], vp["vah"], vp["val"]
     session_close = vp["session_close"]
     fechou_dentro_da_area = val <= session_close <= vah  # onde a sessão anterior terminou
 
-    swings = find_swings(candles)
-    structure_event = detect_structure_event(candles, swings)
+    swings = find_swings(candles_recentes)
+    structure_event = detect_structure_event(candles_recentes, swings)
 
     poc_tolerance = (vah - val) * 0.05 if vah != val else price * 0.0005
     va_width = (vah - val) if vah > val else price * 0.001
@@ -377,9 +399,9 @@ def generate_signal(candles, vp):
     # ------------------------------------------------------------------
     if not fechou_dentro_da_area and abs(price - poc) <= poc_tolerance:
         direction = "alta" if current["close"] > current["open"] else "baixa"
-        rejeicao = is_rejection_candle(candles[-2], candles[-1], direction)
-        ob = find_order_block(candles, direction)
-        fvgs = find_recent_fvgs(candles)
+        rejeicao = is_rejection_candle(candles_recentes[-2], candles_recentes[-1], direction)
+        ob = find_order_block(candles_recentes, direction)
+        fvgs = find_recent_fvgs(candles_recentes)
         confluencia = rejeicao or (ob and price_in_zone(price, ob)) or any(price_in_zone(price, f) for f in fvgs)
         if confluencia:
             return {"setup": "Repique no POC", "direction": direction,
@@ -392,7 +414,7 @@ def generate_signal(candles, vp):
     # Exige um candle fechando de volta para dentro (pavio cruzando não conta).
     # ------------------------------------------------------------------
     if fechou_dentro_da_area:
-        candles_antes = candles[-10:-1]
+        candles_antes = candles_recentes[-10:-1]
         rompeu_topo = any(c["close"] > vah for c in candles_antes)
         rompeu_fundo = any(c["close"] < val for c in candles_antes)
         fechou_de_volta = val <= price <= vah
@@ -410,7 +432,7 @@ def generate_signal(candles, vp):
     # Vale com a sessão anterior tendo fechado dentro ou fora da área.
     # Rompeu -> pullback ficando perto da área -> BOS na direção do rompimento.
     # ------------------------------------------------------------------
-    candles_antes = candles[-12:-1]
+    candles_antes = candles_recentes[-12:-1]
     rompeu_para_cima = any(c["close"] > vah for c in candles_antes)
     rompeu_para_baixo = any(c["close"] < val for c in candles_antes)
     pullback_alta = rompeu_para_cima and vah < price <= vah + va_width * 0.3
@@ -536,7 +558,7 @@ def main():
     for pair_name, cfg in PAIRS_CONFIG.items():
         try:
             if cfg["source"] == "twelvedata":
-                candles = fetch_twelvedata_candles(cfg["td_symbol"])
+                candles = fetch_twelvedata_candles(cfg["td_symbol"], cfg.get("exchange"))
             else:
                 candles = fetch_binance_candles(cfg["binance_symbol"])
 
