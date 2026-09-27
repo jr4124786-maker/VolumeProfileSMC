@@ -129,13 +129,17 @@ def ensure_volume_proxy(candles):
     return candles
 
 
-def candle_tem_negociacao(c):
+def candle_tem_negociacao(c, pair_name=None):
     """Com o mercado fechado (fim de semana/feriado), várias fontes de dado forex
-    continuam emitindo candles de 15 em 15 min repetindo o último preço negociado
-    (abertura = máxima = mínima = fechamento, todos iguais). Um candle assim, sem
-    nenhuma variação de preço, é tratado como "sem negociação real" e descartado —
-    tanto para decidir se uma sessão teve mercado aberto quanto para gerar sinal."""
-    return c["high"] > c["low"]
+    continuam emitindo candles de 15 em 15 min com uma cotação quase parada —
+    às vezes perfeitamente flat (abertura = máxima = mínima = fechamento), às
+    vezes com um ruído mínimo de menos de 1 pip. Por isso não basta checar
+    "teve alguma variação": exige-se uma amplitude mínima (2 pips no par, ou
+    ~0.01% do preço quando não há pip definido, como no BTC) para considerar
+    que o candle teve negociação real."""
+    pip = PIP_SIZE.get(pair_name)
+    limite = pip * 2 if pip else c["close"] * 0.0001
+    return (c["high"] - c["low"]) >= limite
 
 
 def fetch_binance_candles(symbol):
@@ -512,7 +516,7 @@ def main():
                 print(f"{pair_name}: poucos candles retornados, pulando.")
                 continue
 
-            candles = [c for c in candles if candle_tem_negociacao(c)]
+            candles = [c for c in candles if candle_tem_negociacao(c, pair_name)]
             if len(candles) < 30:
                 print(f"{pair_name}: mercado provavelmente fechado (só vieram candles sem negociação real), pulando.")
                 continue
