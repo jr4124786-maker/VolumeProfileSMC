@@ -142,6 +142,21 @@ def candle_tem_negociacao(c, pair_name=None):
     return (c["high"] - c["low"]) >= limite
 
 
+def dentro_do_fechamento_semanal(t, session_hour):
+    """True se o horário (UTC) cai dentro do fechamento semanal do forex:
+    de sexta até domingo, no session_hour de Nova York — regra fixa da
+    semana, vale todo fim de semana, sem depender de feriado nenhum."""
+    ny_time = t.astimezone(ZoneInfo("America/New_York"))
+    wd = ny_time.weekday()
+    if wd == 5:  # sábado inteiro
+        return True
+    if wd == 4 and ny_time.hour >= session_hour:  # sexta, depois do fechamento
+        return True
+    if wd == 6 and ny_time.hour < session_hour:  # domingo, antes da reabertura
+        return True
+    return False
+
+
 def fetch_binance_candles(symbol):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": INTERVAL_BINANCE, "limit": CANDLE_COUNT}
@@ -165,19 +180,27 @@ def fetch_binance_candles(symbol):
 # VOLUME PROFILE
 # =========================================================================
 
-def get_session_window(candles, session_hour, tz_name, min_candles=8, max_lookback_days=7):
+def get_session_window(candles, session_hour, tz_name, min_candles=8, max_lookback_days=7,
+                        fecha_no_fim_de_semana=True):
     """Retorna (início, fim) em UTC da última sessão de 24h com negociação
     real. Começa pela janela "de calendário" mais recente (24h terminando
-    no session_hour); se ela não tiver candles reais de mercado, volta mais
-    um dia e tenta de novo — até achar a última sessão em que o mercado
-    realmente funcionou.
+    no session_hour); se ela não tiver candles reais de mercado — ou cair
+    no fechamento semanal do forex —, volta mais um dia e tenta de novo,
+    até achar a última sessão em que o mercado realmente funcionou.
+
+    fecha_no_fim_de_semana=True (forex): pula direto qualquer janela entre
+    sexta 18h e domingo 18h (hora de Nova York) — o forex nunca opera nesse
+    intervalo, então nem vale a pena checar os candles ali (evita depender
+    de "ruído" de fim de semana de alguma fonte de dado ser maior ou menor
+    que o esperado). Use False para mercados 24/7 como o BTC.
 
     min_candles é baixo de propósito (só ~2h de negociação já basta): o
-    objetivo é distinguir "mercado global fechado" (fim de semana, Natal,
+    objetivo é distinguir "mercado global fechado" (feriados tipo Natal,
     Ano Novo — praticamente zero candles em qualquer fonte) de "só um
     feriado local" (outras praças continuam operando, ainda vem bastante
     candle) — sem precisar de uma lista de datas de feriado."""
     tz = ZoneInfo(tz_name)
+    ny = ZoneInfo("America/New_York")
     now = datetime.now(tz)
     today_boundary = now.replace(hour=session_hour, minute=0, second=0, microsecond=0)
     session_end = today_boundary if now >= today_boundary else today_boundary - timedelta(days=1)
@@ -185,6 +208,11 @@ def get_session_window(candles, session_hour, tz_name, min_candles=8, max_lookba
     session_start = session_end - timedelta(days=1)
     for _ in range(max_lookback_days):
         session_start = session_end - timedelta(days=1)
+        if fecha_no_fim_de_semana and session_start.astimezone(ny).weekday() in (4, 5):
+            # início da janela é sexta ou sábado (hora de NY) -> mercado fechado
+            # o intervalo inteiro; nem checa candle, já pula pro dia anterior.
+            session_end = session_start
+            continue
         start_utc = session_start.astimezone(timezone.utc)
         end_utc = session_end.astimezone(timezone.utc)
         candles_na_janela = sum(1 for c in candles if start_utc <= c["time"] < end_utc)
@@ -521,6 +549,12 @@ def main():
                 print(f"{pair_name}: mercado provavelmente fechado (só vieram candles sem negociação real), pulando.")
                 continue
 
+            if pair_name != "BTC_USD":
+                candles = [c for c in candles if not dentro_do_fechamento_semanal(c["time"], cfg["session_hour"])]
+                if len(candles) < 30:
+                    print(f"{pair_name}: mercado fechado (fim de semana), pulando.")
+                    continue
+
             # --- Resolve sinais abertos desse par (placar de ganhos/perdas) ---
             ainda_abertos = []
             for sinal in state["open_signals"]:
@@ -539,7 +573,9 @@ def main():
                 print(f"{pair_name}: sinal de {sinal['signal_time']} fechado como {resultado}.")
             state["open_signals"] = ainda_abertos
 
-            session_start, session_end = get_session_window(candles, cfg["session_hour"], cfg["tz"])
+            session_start, session_end = get_session_window(
+                candles, cfg["session_hour"], cfg["tz"],
+                fecha_no_fim_de_semana=(pair_name != "BTC_USD"))
             vp = compute_volume_profile(candles, session_start, session_end)
             signal = generate_signal(candles, vp)
 
