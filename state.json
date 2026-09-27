@@ -4,5 +4,8 @@
   "GBP_USD|Repique no POC|2026-09-26": true,
   "GBP_USD|Rompimento de alta|2026-09-26": true,
   "GBP_USD|Reversão na Área de Valor|2026-09-27": true,
-  "USD_JPY|Reversão na Área de Valor|2026-09-27": true
+  "USD_JPY|Reversão na Área de Valor|2026-09-27": true,
+  "open_signals": [],
+  "weekly_results": {},
+  "relatorio_enviado_semana": null
 }
