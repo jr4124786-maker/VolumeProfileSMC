@@ -451,10 +451,16 @@ def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="
     """Compara os OBs atuais com os já conhecidos (guardados em state_ob,
     que fica salvo dentro do seu state.json) e devolve só os eventos NOVOS
     desde a última execução: 'formacao' (OB confirmado) e/ou 'validacao'
-    (preço voltou e tocou a zona — já vem com entrada e stop)."""
+    (preço voltou e tocou a zona — já vem com entrada e stop).
+
+    Na primeira checagem de cada par, só REGISTRA os Order Blocks que já
+    existem no histórico (sem notificar nada) — evita mandar uma enxurrada
+    de avisos de OBs antigos assim que a funcionalidade é ligada."""
     obs = find_order_blocks_smc(candles)
     eventos = []
     n = len(candles)
+    inicializados = state_ob.setdefault("inicializados", [])
+    primeira_vez = pair_name not in inicializados
 
     for ob in obs:
         oid = _ob_id(pair_name, ob)
@@ -462,7 +468,7 @@ def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="
         if oid not in state_ob["conhecidos"]:
             state_ob["conhecidos"].append(oid)
             state_ob["ativos"][oid] = True
-            if alert_on in ("formacao", "ambos"):
+            if not primeira_vez and alert_on in ("formacao", "ambos"):
                 eventos.append({
                     "evento": "formacao", "par": pair_name, "tipo": ob["tipo"],
                     "formacao": ob["formacao"],
@@ -477,7 +483,7 @@ def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="
                 invalidou = (candles[m]["close"] < ob["zona_low"] if ob["tipo"] == "alta"
                              else candles[m]["close"] > ob["zona_high"])
                 if tocou:
-                    if alert_on in ("validacao", "ambos"):
+                    if not primeira_vez and alert_on in ("validacao", "ambos"):
                         entry = ob["zona_high"] if ob["tipo"] == "alta" else ob["zona_low"]
                         buf = _ob_sl_buffer(pair_name, entry, sl_buffer_pips)
                         sl = (ob["zona_low"] - buf if ob["tipo"] == "alta" else ob["zona_high"] + buf)
@@ -491,6 +497,9 @@ def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="
                 if invalidou:
                     del state_ob["ativos"][oid]
                     break
+
+    if primeira_vez:
+        inicializados.append(pair_name)
 
     return eventos
 
