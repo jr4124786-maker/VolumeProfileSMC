@@ -354,6 +354,160 @@ def is_rejection_candle(prev_candle, candle, direction):
 
 
 # =========================================================================
+# ORDER BLOCKS (SMC original, confirmado por Fair Value Gap) — alerta à parte
+# =========================================================================
+# Detecção independente da usada no Repique no POC: aqui é o método "OB
+# original" completo — fractal de estrutura, BOS só vira Order Block se
+# deixar um Fair Value Gap confirmando o movimento, e o próprio OB fica em
+# observação até o preço voltar e tocar a zona (validação) ou invalidar.
+# Manda um alerta no Telegram tanto na formação quanto na validação.
+
+def find_order_blocks_smc(candles):
+    """candles: lista de dicts (mais antigo -> mais recente), com 'time',
+    'open', 'high', 'low', 'close'. Só conta Order Block se o rompimento
+    de estrutura (BOS) tiver deixado um Fair Value Gap confirmando."""
+    n = len(candles)
+    if n < 6:
+        return []
+
+    swing_high = [False] * n
+    swing_low = [False] * n
+    for i in range(2, n - 2):
+        highs = [candles[i + d]["high"] for d in range(-2, 3)]
+        lows = [candles[i + d]["low"] for d in range(-2, 3)]
+        if candles[i]["high"] == max(highs) and highs.count(candles[i]["high"]) == 1:
+            swing_high[i] = True
+        if candles[i]["low"] == min(lows) and lows.count(candles[i]["low"]) == 1:
+            swing_low[i] = True
+
+    obs = []
+    last_confirmed_high = None
+    last_confirmed_low = None
+    high_broken = True
+    low_broken = True
+
+    for i in range(n):
+        j = i - 2
+        if 2 <= j < n - 2:
+            if swing_high[j]:
+                last_confirmed_high = (j, candles[j]["high"])
+                high_broken = False
+            if swing_low[j]:
+                last_confirmed_low = (j, candles[j]["low"])
+                low_broken = False
+
+        # BOS de alta, exige Fair Value Gap de alta ao redor da vela de rompimento
+        if (last_confirmed_high and not high_broken and i > last_confirmed_high[0]
+                and candles[i]["close"] > last_confirmed_high[1]
+                and i - 1 >= 0 and i + 1 < n):
+            if candles[i + 1]["low"] > candles[i - 1]["high"]:
+                high_broken = True
+                bos_idx = i
+                k = bos_idx - 1
+                while k > 0 and candles[k]["close"] >= candles[k]["open"]:
+                    k -= 1
+                if k > 0 and candles[k]["close"] < candles[k]["open"]:
+                    obs.append({
+                        "tipo": "alta", "formacao": candles[k]["time"],
+                        "zona_low": candles[k]["low"], "zona_high": candles[k]["high"],
+                        "bos_idx": bos_idx,
+                    })
+            else:
+                high_broken = True
+
+        # BOS de baixa, exige Fair Value Gap de baixa
+        if (last_confirmed_low and not low_broken and i > last_confirmed_low[0]
+                and candles[i]["close"] < last_confirmed_low[1]
+                and i - 1 >= 0 and i + 1 < n):
+            if candles[i + 1]["high"] < candles[i - 1]["low"]:
+                low_broken = True
+                bos_idx = i
+                k = bos_idx - 1
+                while k > 0 and candles[k]["close"] <= candles[k]["open"]:
+                    k -= 1
+                if k > 0 and candles[k]["close"] > candles[k]["open"]:
+                    obs.append({
+                        "tipo": "baixa", "formacao": candles[k]["time"],
+                        "zona_low": candles[k]["low"], "zona_high": candles[k]["high"],
+                        "bos_idx": bos_idx,
+                    })
+            else:
+                low_broken = True
+
+    return obs
+
+
+def _ob_id(pair, ob):
+    """ID único e estável do OB, pra nunca notificar o mesmo duas vezes."""
+    return f"{pair}_{ob['tipo']}_{ob['formacao'].isoformat()}"
+
+
+def _ob_sl_buffer(pair_name, preco_referencia, buffer_pips=2):
+    pip = PIP_SIZE.get(pair_name)
+    return buffer_pips * pip if pip else preco_referencia * 0.0002  # BTC etc.: ~0.02% do preço
+
+
+def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="ambos"):
+    """Compara os OBs atuais com os já conhecidos (guardados em state_ob,
+    que fica salvo dentro do seu state.json) e devolve só os eventos NOVOS
+    desde a última execução: 'formacao' (OB confirmado) e/ou 'validacao'
+    (preço voltou e tocou a zona — já vem com entrada e stop)."""
+    obs = find_order_blocks_smc(candles)
+    eventos = []
+    n = len(candles)
+
+    for ob in obs:
+        oid = _ob_id(pair_name, ob)
+
+        if oid not in state_ob["conhecidos"]:
+            state_ob["conhecidos"].append(oid)
+            state_ob["ativos"][oid] = True
+            if alert_on in ("formacao", "ambos"):
+                eventos.append({
+                    "evento": "formacao", "par": pair_name, "tipo": ob["tipo"],
+                    "formacao": ob["formacao"],
+                    "zona_low": round(ob["zona_low"], 5),
+                    "zona_high": round(ob["zona_high"], 5),
+                })
+
+        if oid in state_ob["ativos"]:
+            for m in range(ob["bos_idx"] + 1, n):
+                tocou = (candles[m]["low"] <= ob["zona_high"] if ob["tipo"] == "alta"
+                          else candles[m]["high"] >= ob["zona_low"])
+                invalidou = (candles[m]["close"] < ob["zona_low"] if ob["tipo"] == "alta"
+                             else candles[m]["close"] > ob["zona_high"])
+                if tocou:
+                    if alert_on in ("validacao", "ambos"):
+                        entry = ob["zona_high"] if ob["tipo"] == "alta" else ob["zona_low"]
+                        buf = _ob_sl_buffer(pair_name, entry, sl_buffer_pips)
+                        sl = (ob["zona_low"] - buf if ob["tipo"] == "alta" else ob["zona_high"] + buf)
+                        eventos.append({
+                            "evento": "validacao", "par": pair_name, "tipo": ob["tipo"],
+                            "validacao": candles[m]["time"],
+                            "entry": round(entry, 5), "sl": round(sl, 5),
+                        })
+                    del state_ob["ativos"][oid]
+                    break
+                if invalidou:
+                    del state_ob["ativos"][oid]
+                    break
+
+    return eventos
+
+
+def formatar_mensagem_ob(ev):
+    seta = "🟢 ALTA" if ev["tipo"] == "alta" else "🔴 BAIXA"
+    par_fmt = ev["par"].replace("_", "/")
+    if ev["evento"] == "formacao":
+        return (f"📦 <b>Novo Order Block</b> ({seta}) — {par_fmt}\n"
+                f"Formado às {ev['formacao'].astimezone(DISPLAY_TZ).strftime('%d/%m %H:%M')}\n"
+                f"Zona: {ev['zona_low']} – {ev['zona_high']}")
+    return (f"✅ <b>Order Block validado</b> ({seta}) — {par_fmt}\n"
+            f"Toque às {ev['validacao'].astimezone(DISPLAY_TZ).strftime('%d/%m %H:%M')}\n"
+            f"Entrada: {ev['entry']} | SL: {ev['sl']}")
+
+
+# =========================================================================
 # LÓGICA DE SINAL (confluência Volume Profile + SMC)
 # =========================================================================
 
@@ -539,6 +693,7 @@ def load_state():
     state.setdefault("open_signals", [])
     state.setdefault("weekly_results", {})
     state.setdefault("relatorio_enviado_semana", None)
+    state.setdefault("order_blocks", {"conhecidos": [], "ativos": {}})
     return state
 
 
@@ -594,6 +749,13 @@ def main():
                 registro["ganhos" if resultado == "ganho" else "perdas"] += 1
                 print(f"{pair_name}: sinal de {sinal['signal_time']} fechado como {resultado}.")
             state["open_signals"] = ainda_abertos
+
+            # --- Order Blocks (SMC original + FVG) — alerta próprio, independente do sinal ---
+            candles_ob = candles_desde_ultima_reabertura(candles)
+            eventos_ob = checar_eventos_ob(candles_ob, state["order_blocks"], pair_name)
+            for ev in eventos_ob:
+                send_telegram_message(formatar_mensagem_ob(ev))
+                print(f"{pair_name}: Order Block {ev['evento']} ({ev['tipo']}).")
 
             session_start, session_end = get_session_window(
                 candles, cfg["session_hour"], cfg["tz"],
