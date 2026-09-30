@@ -33,6 +33,7 @@ O QUE VOCÊ PODE AJUSTAR SEM PROGRAMAR (procure "AJUSTE AQUI"):
 
 import os
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -117,6 +118,23 @@ def fetch_twelvedata_candles(symbol, exchange=None):
             "volume": float(v.get("volume") or 0),
         })
     return ensure_volume_proxy(candles)
+
+
+def fetch_com_retry(fetch_fn, *args, tentativas=2, espera_segundos=75, **kwargs):
+    """Tenta buscar os candles até `tentativas` vezes, com uma pausa entre
+    elas, pra pegar o candle de 15 min recém-fechado o mais rápido possível.
+    Cobre dois motivos comuns do candle mais novo ainda não estar disponível
+    na hora exata em que o job dispara: a Twelve Data leva alguns segundos
+    pra publicar o candle, e o agendamento do GitHub Actions às vezes atrasa
+    um pouco (comportamento documentado deles, não é bug)."""
+    candles = fetch_fn(*args, **kwargs)
+    for _ in range(tentativas - 1):
+        agora = datetime.now(timezone.utc)
+        if candles and (agora - candles[-1]["time"]) <= timedelta(minutes=16):
+            break  # candle mais recente já veio, não precisa esperar mais
+        time.sleep(espera_segundos)
+        candles = fetch_fn(*args, **kwargs)
+    return candles
 
 
 def ensure_volume_proxy(candles):
@@ -722,7 +740,7 @@ def main():
     for pair_name, cfg in PAIRS_CONFIG.items():
         try:
             if cfg["source"] == "twelvedata":
-                candles = fetch_twelvedata_candles(cfg["td_symbol"], cfg.get("exchange"))
+                candles = fetch_com_retry(fetch_twelvedata_candles, cfg["td_symbol"], cfg.get("exchange"))
             else:
                 candles = fetch_binance_candles(cfg["binance_symbol"])
 
@@ -761,7 +779,7 @@ def main():
 
             # --- Order Blocks (SMC original + FVG) — alerta próprio, independente do sinal ---
             candles_ob = candles_desde_ultima_reabertura(candles)
-            eventos_ob = checar_eventos_ob(candles_ob, state["order_blocks"], pair_name)
+            eventos_ob = checar_eventos_ob(candles_ob, state["order_blocks"], pair_name, alert_on="formacao")
             for ev in eventos_ob:
                 send_telegram_message(formatar_mensagem_ob(ev))
                 print(f"{pair_name}: Order Block {ev['evento']} ({ev['tipo']}).")
