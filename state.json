@@ -144,8 +144,7 @@
       "EUR_USD_alta_2026-09-30T07:45:00+00:00": true,
       "BTC_USD_alta_2026-09-30T08:45:00+00:00": true,
       "GBP_USD_alta_2026-09-30T09:30:00+00:00": true,
-      "USD_JPY_baixa_2026-09-30T11:45:00+00:00": true,
-      "BTC_USD_alta_2026-09-30T12:00:00+00:00": true
+      "USD_JPY_baixa_2026-09-30T11:45:00+00:00": true
     },
     "inicializados": [
       "EUR_USD",
@@ -155,5 +154,6 @@
     ]
   },
   "USD_JPY|Repique no POC|2026-09-30": true,
-  "EUR_USD|Rompimento de alta|2026-09-30": true
+  "EUR_USD|Rompimento de alta|2026-09-30": true,
+  "BTC_USD|Reversão na Área de Valor|2026-09-30": true
 }
