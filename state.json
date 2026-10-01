@@ -5,7 +5,16 @@
   "GBP_USD|Rompimento de alta|2026-09-26": true,
   "GBP_USD|Reversão na Área de Valor|2026-09-27": true,
   "USD_JPY|Reversão na Área de Valor|2026-09-27": true,
-  "open_signals": [],
+  "open_signals": [
+    {
+      "pair": "GBP_USD",
+      "direction": "alta",
+      "entry_price": 1.32606,
+      "signal_time": "2026-10-01T06:45:00+00:00",
+      "semana": "2026-W40",
+      "dia": "Qui"
+    }
+  ],
   "weekly_results": {
     "2026-W40": {
       "Seg": {
@@ -150,7 +159,8 @@
       "USD_JPY_alta_2026-10-01T03:45:00+00:00",
       "EUR_USD_baixa_2026-10-01T04:30:00+00:00",
       "BTC_USD_alta_2026-10-01T04:15:00+00:00",
-      "USD_JPY_alta_2026-10-01T04:30:00+00:00"
+      "USD_JPY_alta_2026-10-01T04:30:00+00:00",
+      "EUR_USD_baixa_2026-10-01T06:00:00+00:00"
     ],
     "ativos": {
       "GBP_USD_alta_2026-09-29T17:45:00+00:00": true,
@@ -167,7 +177,6 @@
       "EUR_USD_baixa_2026-10-01T01:15:00+00:00": true,
       "EUR_USD_baixa_2026-10-01T03:00:00+00:00": true,
       "BTC_USD_alta_2026-10-01T03:00:00+00:00": true,
-      "USD_JPY_alta_2026-10-01T03:45:00+00:00": true,
       "BTC_USD_alta_2026-10-01T04:15:00+00:00": true
     },
     "inicializados": [
@@ -185,5 +194,6 @@
   "USD_JPY|rompeu_maxima_dia_anterior|2026-10-01": true,
   "EUR_USD|rompeu_minima_dia_anterior|2026-10-01": true,
   "GBP_USD|Rompimento de baixa|2026-10-01": true,
-  "BTC_USD|Rompimento de alta|2026-10-01": true
+  "BTC_USD|Rompimento de alta|2026-10-01": true,
+  "GBP_USD|Reversão na Área de Valor|2026-10-01": true
 }
