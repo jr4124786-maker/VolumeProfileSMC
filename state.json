@@ -164,5 +164,6 @@
   "EUR_USD|Rompimento de alta|2026-09-30": true,
   "BTC_USD|Reversão na Área de Valor|2026-09-30": true,
   "EUR_USD|Rompimento de baixa|2026-09-30": true,
-  "USD_JPY|Rompimento de alta|2026-09-30": true
+  "USD_JPY|Rompimento de alta|2026-09-30": true,
+  "USD_JPY|rompeu_maxima_dia_anterior|2026-10-01": true
 }
