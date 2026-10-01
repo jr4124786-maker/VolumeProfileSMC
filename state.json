@@ -168,8 +168,7 @@
       "EUR_USD_baixa_2026-10-01T03:00:00+00:00": true,
       "BTC_USD_alta_2026-10-01T03:00:00+00:00": true,
       "USD_JPY_alta_2026-10-01T03:45:00+00:00": true,
-      "BTC_USD_alta_2026-10-01T04:15:00+00:00": true,
-      "USD_JPY_alta_2026-10-01T04:30:00+00:00": true
+      "BTC_USD_alta_2026-10-01T04:15:00+00:00": true
     },
     "inicializados": [
       "EUR_USD",
