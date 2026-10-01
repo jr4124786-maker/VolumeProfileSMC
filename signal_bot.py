@@ -289,7 +289,8 @@ def compute_volume_profile(candles, session_start, session_end):
     val_price = price_min + min(included) * bin_size
     vah_price = price_min + (max(included) + 1) * bin_size
     session_close = session_candles[-1]["close"]  # fechamento da sessão anterior (define Estratégia 1 vs 2)
-    return {"poc": poc_price, "vah": vah_price, "val": val_price, "session_close": session_close}
+    return {"poc": poc_price, "vah": vah_price, "val": val_price, "session_close": session_close,
+            "session_high": price_max, "session_low": price_min}
 
 
 # =========================================================================
@@ -554,6 +555,35 @@ def candles_desde_ultima_reabertura(candles):
     return candles[corte:]
 
 
+def checar_rompimento_dia_anterior(candles, vp, pair_name, state, today_str):
+    """Alerta independente dos outros: rompeu a máxima e/ou a mínima REAL da
+    sessão anterior (não é VAH/VAL nem exige SMC) — os dois lados são
+    checados separadamente, então pode disparar um, o outro, ou nenhum."""
+    eventos = []
+    if vp is None:
+        return eventos
+    price = candles[-1]["close"]
+    session_high = vp["session_high"]
+    session_low = vp["session_low"]
+    par_fmt = pair_name.replace("_", "/")
+
+    if price > session_high:
+        key = f"{pair_name}|rompeu_maxima_dia_anterior|{today_str}"
+        if not state.get(key):
+            state[key] = True
+            eventos.append(f"🔺 <b>{par_fmt}</b> rompeu a máxima do dia anterior ({session_high:.5f})\n"
+                            f"Preço atual: {price:.5f}")
+
+    if price < session_low:
+        key = f"{pair_name}|rompeu_minima_dia_anterior|{today_str}"
+        if not state.get(key):
+            state[key] = True
+            eventos.append(f"🔻 <b>{par_fmt}</b> rompeu a mínima do dia anterior ({session_low:.5f})\n"
+                            f"Preço atual: {price:.5f}")
+
+    return eventos
+
+
 def generate_signal(candles, vp):
     if vp is None or len(candles) < 30:
         return None
@@ -795,6 +825,10 @@ def main():
 
             print(f"{pair_name}: perfil de volume de {fmt(session_start)} até {fmt(session_end)} "
                   f"| último candle recebido: {fmt(candles[-1]['time'])}")
+
+            for msg_rompimento in checar_rompimento_dia_anterior(candles, vp, pair_name, state, today_str):
+                send_telegram_message(msg_rompimento)
+                print(f"{pair_name}: alerta de rompimento da máxima/mínima do dia anterior enviado.")
 
             if signal:
                 key = f"{pair_name}|{signal['setup']}|{today_str}"
