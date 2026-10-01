@@ -159,7 +159,8 @@
       "EUR_USD_baixa_2026-10-01T09:00:00+00:00",
       "GBP_USD_baixa_2026-10-01T09:15:00+00:00",
       "USD_JPY_baixa_2026-10-01T09:30:00+00:00",
-      "GBP_USD_alta_2026-10-01T11:15:00+00:00"
+      "GBP_USD_alta_2026-10-01T11:15:00+00:00",
+      "EUR_USD_alta_2026-10-01T11:15:00+00:00"
     ],
     "ativos": {
       "GBP_USD_alta_2026-09-29T17:45:00+00:00": true,
@@ -179,7 +180,8 @@
       "USD_JPY_alta_2026-10-01T06:45:00+00:00": true,
       "BTC_USD_baixa_2026-10-01T06:00:00+00:00": true,
       "USD_JPY_baixa_2026-10-01T09:30:00+00:00": true,
-      "GBP_USD_alta_2026-10-01T11:15:00+00:00": true
+      "GBP_USD_alta_2026-10-01T11:15:00+00:00": true,
+      "EUR_USD_alta_2026-10-01T11:15:00+00:00": true
     },
     "inicializados": [
       "EUR_USD",
