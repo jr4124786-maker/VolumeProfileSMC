@@ -5,16 +5,7 @@
   "GBP_USD|Rompimento de alta|2026-09-26": true,
   "GBP_USD|Reversão na Área de Valor|2026-09-27": true,
   "USD_JPY|Reversão na Área de Valor|2026-09-27": true,
-  "open_signals": [
-    {
-      "pair": "GBP_USD",
-      "direction": "alta",
-      "entry_price": 1.32457,
-      "signal_time": "2026-10-02T14:00:00+00:00",
-      "semana": "2026-W40",
-      "dia": "Sex"
-    }
-  ],
+  "open_signals": [],
   "weekly_results": {
     "2026-W40": {
       "Seg": {
@@ -35,7 +26,7 @@
       },
       "Sex": {
         "ganhos": 1,
-        "perdas": 1
+        "perdas": 2
       }
     }
   },
@@ -222,7 +213,6 @@
       "USD_JPY_baixa_2026-10-02T03:30:00+00:00": true,
       "BTC_USD_alta_2026-10-02T07:30:00+00:00": true,
       "GBP_USD_alta_2026-10-02T12:00:00+00:00": true,
-      "USD_JPY_baixa_2026-10-02T12:00:00+00:00": true,
       "EUR_USD_alta_2026-10-02T13:15:00+00:00": true,
       "GBP_USD_alta_2026-10-02T13:00:00+00:00": true
     },
