@@ -72,9 +72,8 @@ DISPLAY_TZ = ZoneInfo("America/Sao_Paulo")
 SWING_LEFT = 2              # velas à esquerda para confirmar um topo/fundo
 SWING_RIGHT = 2             # velas à direita para confirmar um topo/fundo
 
-# Placar de ganhos/perdas: quantos pips o preço precisa andar a favor do sinal
-# para contar como ganho. Só se aplica a forex (BTC não usa "pips").
-PIPS_ALVO = 7
+# Tamanho do pip por par — usado pelo filtro de ruído de fim de semana
+# (candle_tem_negociacao). BTC não tem pip, usa um limite relativo ao preço.
 PIP_SIZE = {
     "EUR_USD": 0.0001,
     "GBP_USD": 0.0001,
@@ -373,169 +372,6 @@ def is_rejection_candle(prev_candle, candle, direction):
 
 
 # =========================================================================
-# ORDER BLOCKS (SMC original, confirmado por Fair Value Gap) — alerta à parte
-# =========================================================================
-# Detecção independente da usada no Repique no POC: aqui é o método "OB
-# original" completo — fractal de estrutura, BOS só vira Order Block se
-# deixar um Fair Value Gap confirmando o movimento, e o próprio OB fica em
-# observação até o preço voltar e tocar a zona (validação) ou invalidar.
-# Manda um alerta no Telegram tanto na formação quanto na validação.
-
-def find_order_blocks_smc(candles):
-    """candles: lista de dicts (mais antigo -> mais recente), com 'time',
-    'open', 'high', 'low', 'close'. Só conta Order Block se o rompimento
-    de estrutura (BOS) tiver deixado um Fair Value Gap confirmando."""
-    n = len(candles)
-    if n < 6:
-        return []
-
-    swing_high = [False] * n
-    swing_low = [False] * n
-    for i in range(2, n - 2):
-        highs = [candles[i + d]["high"] for d in range(-2, 3)]
-        lows = [candles[i + d]["low"] for d in range(-2, 3)]
-        if candles[i]["high"] == max(highs) and highs.count(candles[i]["high"]) == 1:
-            swing_high[i] = True
-        if candles[i]["low"] == min(lows) and lows.count(candles[i]["low"]) == 1:
-            swing_low[i] = True
-
-    obs = []
-    last_confirmed_high = None
-    last_confirmed_low = None
-    high_broken = True
-    low_broken = True
-
-    for i in range(n):
-        j = i - 2
-        if 2 <= j < n - 2:
-            if swing_high[j]:
-                last_confirmed_high = (j, candles[j]["high"])
-                high_broken = False
-            if swing_low[j]:
-                last_confirmed_low = (j, candles[j]["low"])
-                low_broken = False
-
-        # BOS de alta, exige Fair Value Gap de alta ao redor da vela de rompimento
-        if (last_confirmed_high and not high_broken and i > last_confirmed_high[0]
-                and candles[i]["close"] > last_confirmed_high[1]
-                and i - 1 >= 0 and i + 1 < n):
-            if candles[i + 1]["low"] > candles[i - 1]["high"]:
-                high_broken = True
-                bos_idx = i
-                k = bos_idx - 1
-                while k > 0 and candles[k]["close"] >= candles[k]["open"]:
-                    k -= 1
-                if k > 0 and candles[k]["close"] < candles[k]["open"]:
-                    obs.append({
-                        "tipo": "alta", "formacao": candles[k]["time"],
-                        "zona_low": candles[k]["low"], "zona_high": candles[k]["high"],
-                        "bos_idx": bos_idx,
-                    })
-            else:
-                high_broken = True
-
-        # BOS de baixa, exige Fair Value Gap de baixa
-        if (last_confirmed_low and not low_broken and i > last_confirmed_low[0]
-                and candles[i]["close"] < last_confirmed_low[1]
-                and i - 1 >= 0 and i + 1 < n):
-            if candles[i + 1]["high"] < candles[i - 1]["low"]:
-                low_broken = True
-                bos_idx = i
-                k = bos_idx - 1
-                while k > 0 and candles[k]["close"] <= candles[k]["open"]:
-                    k -= 1
-                if k > 0 and candles[k]["close"] > candles[k]["open"]:
-                    obs.append({
-                        "tipo": "baixa", "formacao": candles[k]["time"],
-                        "zona_low": candles[k]["low"], "zona_high": candles[k]["high"],
-                        "bos_idx": bos_idx,
-                    })
-            else:
-                low_broken = True
-
-    return obs
-
-
-def _ob_id(pair, ob):
-    """ID único e estável do OB, pra nunca notificar o mesmo duas vezes."""
-    return f"{pair}_{ob['tipo']}_{ob['formacao'].isoformat()}"
-
-
-def _ob_sl_buffer(pair_name, preco_referencia, buffer_pips=2):
-    pip = PIP_SIZE.get(pair_name)
-    return buffer_pips * pip if pip else preco_referencia * 0.0002  # BTC etc.: ~0.02% do preço
-
-
-def checar_eventos_ob(candles, state_ob, pair_name, sl_buffer_pips=2, alert_on="ambos"):
-    """Compara os OBs atuais com os já conhecidos (guardados em state_ob,
-    que fica salvo dentro do seu state.json) e devolve só os eventos NOVOS
-    desde a última execução: 'formacao' (OB confirmado) e/ou 'validacao'
-    (preço voltou e tocou a zona — já vem com entrada e stop).
-
-    Na primeira checagem de cada par, só REGISTRA os Order Blocks que já
-    existem no histórico (sem notificar nada) — evita mandar uma enxurrada
-    de avisos de OBs antigos assim que a funcionalidade é ligada."""
-    obs = find_order_blocks_smc(candles)
-    eventos = []
-    n = len(candles)
-    inicializados = state_ob.setdefault("inicializados", [])
-    primeira_vez = pair_name not in inicializados
-
-    for ob in obs:
-        oid = _ob_id(pair_name, ob)
-
-        if oid not in state_ob["conhecidos"]:
-            state_ob["conhecidos"].append(oid)
-            state_ob["ativos"][oid] = True
-            if not primeira_vez and alert_on in ("formacao", "ambos"):
-                eventos.append({
-                    "evento": "formacao", "par": pair_name, "tipo": ob["tipo"],
-                    "formacao": ob["formacao"],
-                    "zona_low": round(ob["zona_low"], 5),
-                    "zona_high": round(ob["zona_high"], 5),
-                })
-
-        if oid in state_ob["ativos"]:
-            for m in range(ob["bos_idx"] + 1, n):
-                tocou = (candles[m]["low"] <= ob["zona_high"] if ob["tipo"] == "alta"
-                          else candles[m]["high"] >= ob["zona_low"])
-                invalidou = (candles[m]["close"] < ob["zona_low"] if ob["tipo"] == "alta"
-                             else candles[m]["close"] > ob["zona_high"])
-                if tocou:
-                    if not primeira_vez and alert_on in ("validacao", "ambos"):
-                        entry = ob["zona_high"] if ob["tipo"] == "alta" else ob["zona_low"]
-                        buf = _ob_sl_buffer(pair_name, entry, sl_buffer_pips)
-                        sl = (ob["zona_low"] - buf if ob["tipo"] == "alta" else ob["zona_high"] + buf)
-                        eventos.append({
-                            "evento": "validacao", "par": pair_name, "tipo": ob["tipo"],
-                            "validacao": candles[m]["time"],
-                            "entry": round(entry, 5), "sl": round(sl, 5),
-                        })
-                    del state_ob["ativos"][oid]
-                    break
-                if invalidou:
-                    del state_ob["ativos"][oid]
-                    break
-
-    if primeira_vez:
-        inicializados.append(pair_name)
-
-    return eventos
-
-
-def formatar_mensagem_ob(ev):
-    seta = "🟢 ALTA" if ev["tipo"] == "alta" else "🔴 BAIXA"
-    par_fmt = ev["par"].replace("_", "/")
-    if ev["evento"] == "formacao":
-        return (f"📦 <b>Novo Order Block</b> ({seta}) — {par_fmt}\n"
-                f"Formado às {ev['formacao'].astimezone(DISPLAY_TZ).strftime('%d/%m %H:%M')}\n"
-                f"Zona: {ev['zona_low']} – {ev['zona_high']}")
-    return (f"✅ <b>Order Block validado</b> ({seta}) — {par_fmt}\n"
-            f"Toque às {ev['validacao'].astimezone(DISPLAY_TZ).strftime('%d/%m %H:%M')}\n"
-            f"Entrada: {ev['entry']} | SL: {ev['sl']}")
-
-
-# =========================================================================
 # LÓGICA DE SINAL (confluência Volume Profile + SMC)
 # =========================================================================
 
@@ -659,73 +495,6 @@ def generate_signal(candles, vp):
 
 
 # =========================================================================
-# PLACAR SEMANAL (ganhos/perdas em pips)
-# =========================================================================
-
-DIAS_PT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]  # Python: Monday=0
-
-
-def semana_tag(dt):
-    """Identificador único da semana (ano-semana ISO), para não misturar
-    o placar de uma semana com o de outra."""
-    iso = dt.isocalendar()
-    return f"{iso[0]}-W{iso[1]:02d}"
-
-
-def avaliar_sinal_aberto(sinal, candles):
-    """Olha os candles desde o sinal e vê o que aconteceu primeiro:
-    o preço andou PIPS_ALVO pips a favor (ganho) ou voltou ao preço de
-    entrada sem bater o alvo (perda). Retorna 'ganho', 'perda' ou None
-    (ainda aberto, nenhum dos dois aconteceu ainda)."""
-    entrada = sinal["entry_price"]
-    pip = PIP_SIZE.get(sinal["pair"])
-    if not pip:
-        return None
-    alvo = entrada + PIPS_ALVO * pip if sinal["direction"] == "alta" else entrada - PIPS_ALVO * pip
-    sinal_time = datetime.fromisoformat(sinal["signal_time"])
-    for c in candles:
-        if c["time"] <= sinal_time:
-            continue
-        if sinal["direction"] == "alta":
-            if c["high"] >= alvo:
-                return "ganho"
-            if c["low"] <= entrada:
-                return "perda"
-        else:
-            if c["low"] <= alvo:
-                return "ganho"
-            if c["high"] >= entrada:
-                return "perda"
-    return None
-
-
-def montar_relatorio_semanal(resultados_semana):
-    """Monta a tabela de ganhos/perdas da semana (Dom a Sex) em texto
-    monoespaçado (tag <pre>), pronta para o Telegram."""
-    ordem = ["Seg", "Ter", "Qua", "Qui", "Sex"]
-    linhas = [f"{'Dia':<4}{'✅':>4}{'❌':>4}{'Total':>8}{'Acerto':>9}"]
-    total_g, total_p = 0, 0
-    for dia in ordem:
-        r = resultados_semana.get(dia, {"ganhos": 0, "perdas": 0})
-        g, p = r["ganhos"], r["perdas"]
-        if g == 0 and p == 0:
-            continue
-        total_g += g
-        total_p += p
-        total_dia = g + p
-        taxa = f"{(g / total_dia * 100):.0f}%" if total_dia else "-"
-        linhas.append(f"{dia:<4}{g:>4}{p:>4}{g - p:>+8}{taxa:>9}")
-    if total_g + total_p == 0:
-        linhas.append("(nenhum sinal fechado nesta semana)")
-    else:
-        taxa_total = f"{(total_g / (total_g + total_p) * 100):.0f}%"
-        linhas.append("-" * 29)
-        linhas.append(f"{'Sem.':<4}{total_g:>4}{total_p:>4}{total_g - total_p:>+8}{taxa_total:>9}")
-    tabela = "\n".join(linhas)
-    return f"<b>📊 Placar da semana (alvo: {PIPS_ALVO} pips)</b>\n<pre>{tabela}</pre>"
-
-
-# =========================================================================
 # TELEGRAM
 # =========================================================================
 
@@ -747,10 +516,6 @@ def load_state():
             state = json.load(f)
     else:
         state = {}
-    state.setdefault("open_signals", [])
-    state.setdefault("weekly_results", {})
-    state.setdefault("relatorio_enviado_semana", None)
-    state.setdefault("order_blocks", {"conhecidos": [], "ativos": {}})
     return state
 
 
@@ -789,31 +554,6 @@ def main():
                     print(f"{pair_name}: mercado fechado (fim de semana), pulando.")
                     continue
 
-            # --- Resolve sinais abertos desse par (placar de ganhos/perdas) ---
-            ainda_abertos = []
-            for sinal in state["open_signals"]:
-                if sinal["pair"] != pair_name:
-                    ainda_abertos.append(sinal)
-                    continue
-                resultado = avaliar_sinal_aberto(sinal, candles)
-                if resultado is None:
-                    ainda_abertos.append(sinal)
-                    continue
-                tag = sinal["semana"]
-                dia = sinal["dia"]
-                semana = state["weekly_results"].setdefault(tag, {})
-                registro = semana.setdefault(dia, {"ganhos": 0, "perdas": 0})
-                registro["ganhos" if resultado == "ganho" else "perdas"] += 1
-                print(f"{pair_name}: sinal de {sinal['signal_time']} fechado como {resultado}.")
-            state["open_signals"] = ainda_abertos
-
-            # --- Order Blocks (SMC original + FVG) — alerta próprio, independente do sinal ---
-            candles_ob = candles_desde_ultima_reabertura(candles)
-            eventos_ob = checar_eventos_ob(candles_ob, state["order_blocks"], pair_name, alert_on="formacao")
-            for ev in eventos_ob:
-                send_telegram_message(formatar_mensagem_ob(ev))
-                print(f"{pair_name}: Order Block {ev['evento']} ({ev['tipo']}).")
-
             session_start, session_end = get_session_window(
                 candles, cfg["session_hour"], cfg["tz"],
                 fecha_no_fim_de_semana=(pair_name != "BTC_USD"))
@@ -841,29 +581,6 @@ def main():
                            f"Perfil de volume: {fmt(session_start)} até {fmt(session_end)}")
                     send_telegram_message(msg)
                     state[key] = True
-
-                    # Abre o sinal no placar (só pares com pip definido, ou seja, forex)
-                    if pair_name in PIP_SIZE:
-                        candle_time = candles[-1]["time"]
-                        dia_local = candle_time.astimezone(DISPLAY_TZ)
-                        if dia_local.weekday() == 6:
-                            # Domingo à noite é a reabertura do mercado — na prática já é
-                            # o início da semana de negociação, então conta como segunda
-                            # (tanto o rótulo do dia quanto a semana ISO usada no placar).
-                            dia_semana = "Seg"
-                            tag_semana = semana_tag(dia_local + timedelta(days=1))
-                        else:
-                            dia_semana = DIAS_PT[dia_local.weekday()]
-                            tag_semana = semana_tag(dia_local)
-                        state["open_signals"].append({
-                            "pair": pair_name,
-                            "direction": signal["direction"],
-                            "entry_price": candles[-1]["close"],
-                            "signal_time": candle_time.isoformat(),
-                            "semana": tag_semana,
-                            "dia": dia_semana,
-                        })
-
                     print(f"{pair_name}: alerta enviado ({signal['setup']}).")
                 else:
                     print(f"{pair_name}: sinal ativo mas já avisado hoje.")
@@ -872,18 +589,6 @@ def main():
 
         except Exception as e:
             print(f"Erro ao processar {pair_name}: {e}")
-
-    # --- Relatório semanal: enviado uma vez, na primeira checagem depois
-    #     das 18h de sexta-feira em Nova York (mesmo horário que fecha a
-    #     semana de forex) ---
-    agora_ny = datetime.now(ZoneInfo("America/New_York"))
-    if agora_ny.weekday() == 4 and agora_ny.hour >= 18:
-        tag_semana_atual = semana_tag(agora_ny)
-        if state["relatorio_enviado_semana"] != tag_semana_atual:
-            resultados = state["weekly_results"].get(tag_semana_atual, {})
-            send_telegram_message(montar_relatorio_semanal(resultados))
-            state["relatorio_enviado_semana"] = tag_semana_atual
-            print("Relatório semanal enviado.")
 
     save_state(state)
 
