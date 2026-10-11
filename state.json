@@ -277,5 +277,6 @@
   "USD_JPY|rompeu_minima_dia_anterior|2026-10-08": true,
   "EUR_USD|rompeu_maxima_dia_anterior|2026-10-09": true,
   "USD_JPY|Repique no POC|2026-10-09": true,
-  "BTC_USD|Reversão na Área de Valor|2026-10-11": true
+  "BTC_USD|Reversão na Área de Valor|2026-10-11": true,
+  "BTC_USD|rompeu_maxima_dia_anterior|2026-10-11": true
 }
