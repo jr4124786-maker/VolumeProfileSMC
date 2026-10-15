@@ -291,5 +291,6 @@
   "USD_JPY|rompeu_maxima_dia_anterior|2026-10-14": true,
   "USD_JPY|rompeu_minima_dia_anterior|2026-10-14": true,
   "USD_JPY|Rompimento de baixa|2026-10-14": true,
-  "USD_JPY|rompeu_minima_dia_anterior|2026-10-15": true
+  "USD_JPY|rompeu_minima_dia_anterior|2026-10-15": true,
+  "BTC_USD|rompeu_minima_dia_anterior|2026-10-15": true
 }
