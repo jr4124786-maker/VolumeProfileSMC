@@ -320,5 +320,6 @@
   "USD_JPY|rompeu_maxima_dia_anterior|2026-10-26": true,
   "EUR_USD|rompeu_minima_dia_anterior|2026-10-27": true,
   "GBP_USD|rompeu_minima_dia_anterior|2026-10-27": true,
-  "USD_JPY|rompeu_maxima_dia_anterior|2026-10-27": true
+  "USD_JPY|rompeu_maxima_dia_anterior|2026-10-27": true,
+  "BTC_USD|rompeu_maxima_dia_anterior|2026-10-27": true
 }
