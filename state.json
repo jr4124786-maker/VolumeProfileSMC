@@ -336,5 +336,7 @@
   "BTC_USD|rompeu_minima_dia_anterior|2026-10-30": true,
   "EUR_USD|Rompimento de alta|2026-10-30": true,
   "EUR_USD|Reversão na Área de Valor|2026-10-30": true,
-  "USD_JPY|Reversão na Área de Valor|2026-10-30": true
+  "USD_JPY|Reversão na Área de Valor|2026-10-30": true,
+  "EUR_USD|Reversão na Área de Valor|2026-10-31": true,
+  "USD_JPY|Reversão na Área de Valor|2026-10-31": true
 }
