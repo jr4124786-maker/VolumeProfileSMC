@@ -359,5 +359,8 @@
   "GBP_USD|Rompimento de alta|2026-11-10": true,
   "GBP_USD|rompeu_minima_dia_anterior|2026-11-10": true,
   "USD_JPY|rompeu_maxima_dia_anterior|2026-11-10": true,
-  "BTC_USD|rompeu_minima_dia_anterior|2026-11-10": true
+  "BTC_USD|rompeu_minima_dia_anterior|2026-11-10": true,
+  "EUR_USD|rompeu_minima_dia_anterior|2026-11-11": true,
+  "GBP_USD|rompeu_minima_dia_anterior|2026-11-11": true,
+  "USD_JPY|rompeu_maxima_dia_anterior|2026-11-11": true
 }
