@@ -375,5 +375,6 @@
   "GBP_USD|rompeu_minima_dia_anterior|2026-11-16": true,
   "GBP_USD|Rompimento de baixa|2026-11-17": true,
   "BTC_USD|Reversão na Área de Valor|2026-11-17": true,
-  "USD_JPY|rompeu_minima_dia_anterior|2026-11-17": true
+  "USD_JPY|rompeu_minima_dia_anterior|2026-11-17": true,
+  "BTC_USD|rompeu_minima_dia_anterior|2026-11-17": true
 }
