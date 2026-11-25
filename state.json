@@ -391,5 +391,6 @@
   "GBP_USD|Repique no POC|2026-11-23": true,
   "EUR_USD|rompeu_minima_dia_anterior|2026-11-23": true,
   "GBP_USD|rompeu_minima_dia_anterior|2026-11-23": true,
-  "BTC_USD|rompeu_minima_dia_anterior|2026-11-24": true
+  "BTC_USD|rompeu_minima_dia_anterior|2026-11-24": true,
+  "BTC_USD|rompeu_minima_dia_anterior|2026-11-25": true
 }
